@@ -10,11 +10,17 @@ Get the consumer key and consumer secret from:
 https://<schooldomain>.schoology.com/api
 ```
 
-Export them:
+Persistent shell variables:
 
 ```fish
 set -x SCHOOLOGY_KEY your-consumer-key
 set -x SCHOOLOGY_SECRET your-consumer-secret
+```
+
+Inline for one command:
+
+```fish
+env SCHOOLOGY_KEY=your-consumer-key SCHOOLOGY_SECRET=your-consumer-secret go run . me
 ```
 
 Optional:
@@ -23,20 +29,25 @@ Optional:
 set -x SCHOOLOGY_API_BASE https://api.schoology.com/v1
 ```
 
+## Clone
+
+```fish
+git clone https://github.com/ZimengXiong/schoologyCLI.git
+cd schoologyCLI
+```
+
 ## Build
 
 ```fish
-cd ~/projects/schoologyCLI
 go build
 ```
 
 ## Run
 
 ```fish
-cd ~/projects/schoologyCLI
 go run . me
 go run . sections
-go run . assignments --section 7916825515
+go run . assignments --section <section-id>
 go run . upcoming --days 7
 ```
 
@@ -45,7 +56,7 @@ go run . upcoming --days 7
 ```fish
 ./schoologyCLI me
 ./schoologyCLI sections
-./schoologyCLI assignments --section 7916825515
+./schoologyCLI assignments --section <section-id>
 ./schoologyCLI upcoming --days 7
 ./schoologyCLI upcoming --days 7 --json
 ```
