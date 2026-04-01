@@ -25,12 +25,22 @@ set -x SCHOOLOGY_API_BASE https://api.schoology.com/v1
 
 ## Build
 
-```bash
+```fish
 cd ~/projects/schoologyCLI
 go build
 ```
 
-## Commands
+## Run
+
+```fish
+cd ~/projects/schoologyCLI
+go run . me
+go run . sections
+go run . assignments --section 7916825515
+go run . upcoming --days 7
+```
+
+## Binary
 
 ```fish
 ./schoologyCLI me
