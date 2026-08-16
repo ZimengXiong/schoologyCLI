@@ -31,31 +31,31 @@ type apiLinks struct {
 }
 
 type user struct {
-	ID         int64  `json:"id"`
-	NameFirst  string `json:"name_first"`
-	NameLast   string `json:"name_last"`
+	ID           int64  `json:"id"`
+	NameFirst    string `json:"name_first"`
+	NameLast     string `json:"name_last"`
 	PrimaryEmail string `json:"primary_email"`
-	Role       string `json:"role"`
+	Role         string `json:"role"`
 }
 
 type section struct {
-	ID           int64  `json:"id,string"`
-	CourseTitle  string `json:"course_title"`
-	CourseCode   string `json:"course_code"`
-	SectionTitle string `json:"section_title"`
-	Active       int    `json:"active"`
+	ID           int64    `json:"id,string"`
+	CourseTitle  string   `json:"course_title"`
+	CourseCode   string   `json:"course_code"`
+	SectionTitle string   `json:"section_title"`
+	Active       int      `json:"active"`
 	Links        apiLinks `json:"links"`
 }
 
 type assignment struct {
-	ID        int64  `json:"id"`
-	Title     string `json:"title"`
+	ID          int64  `json:"id"`
+	Title       string `json:"title"`
 	Description string `json:"description"`
-	Due       string `json:"due"`
-	Published int    `json:"published"`
-	Available int    `json:"available"`
-	Completed int    `json:"completed"`
-	WebURL    string `json:"web_url"`
+	Due         string `json:"due"`
+	Published   int    `json:"published"`
+	Available   int    `json:"available"`
+	Completed   int    `json:"completed"`
+	WebURL      string `json:"web_url"`
 }
 
 type event struct {
@@ -116,6 +116,8 @@ func run(args []string) error {
 		return runAssignments(args[1:])
 	case "upcoming":
 		return runUpcoming(args[1:])
+	case "export":
+		return runExport(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -556,6 +558,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  schoologyCLI sections [--all] [--json]")
 	fmt.Fprintln(w, "  schoologyCLI assignments --section <id> [--limit N] [--incomplete] [--json]")
 	fmt.Fprintln(w, "  schoologyCLI upcoming [--days N] [--json]")
+	fmt.Fprintln(w, "  schoologyCLI export [--output DIR] [--active-only]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Environment:")
 	fmt.Fprintln(w, "  SCHOOLOGY_KEY       Schoology consumer key")

@@ -59,6 +59,7 @@ go run . upcoming --days 7
 ./schoologyCLI assignments --section <section-id>
 ./schoologyCLI upcoming --days 7
 ./schoologyCLI upcoming --days 7 --json
+./schoologyCLI export --output schoology-export
 ```
 
 ## Notes
