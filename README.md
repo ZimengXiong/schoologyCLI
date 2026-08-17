@@ -49,6 +49,7 @@ go run . me
 go run . sections
 go run . assignments --section <section-id>
 go run . upcoming --days 7
+go run . submissions --section <section-id> --assignment <assignment-id>
 ```
 
 ## Binary
@@ -59,9 +60,14 @@ go run . upcoming --days 7
 ./schoologyCLI assignments --section <section-id>
 ./schoologyCLI upcoming --days 7
 ./schoologyCLI upcoming --days 7 --json
+./schoologyCLI submissions --section <section-id> --assignment <assignment-id> --json
 ```
 
 ## Notes
 
 - `upcoming` uses the section `events` endpoint and filters to assignment-type events.
-- `assignments` uses the section `assignments` endpoint.
+- `assignments` uses the section `assignments` endpoint. Its `completed` field
+  is assignment metadata and should not be treated as proof of a student
+  submission.
+- `submissions` uses the student-specific submissions endpoint and reports
+  `submitted=true` only when at least one non-draft revision exists.

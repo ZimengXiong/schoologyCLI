@@ -31,31 +31,31 @@ type apiLinks struct {
 }
 
 type user struct {
-	ID         int64  `json:"id"`
-	NameFirst  string `json:"name_first"`
-	NameLast   string `json:"name_last"`
+	ID           int64  `json:"id"`
+	NameFirst    string `json:"name_first"`
+	NameLast     string `json:"name_last"`
 	PrimaryEmail string `json:"primary_email"`
-	Role       string `json:"role"`
+	Role         string `json:"role"`
 }
 
 type section struct {
-	ID           int64  `json:"id,string"`
-	CourseTitle  string `json:"course_title"`
-	CourseCode   string `json:"course_code"`
-	SectionTitle string `json:"section_title"`
-	Active       int    `json:"active"`
+	ID           int64    `json:"id,string"`
+	CourseTitle  string   `json:"course_title"`
+	CourseCode   string   `json:"course_code"`
+	SectionTitle string   `json:"section_title"`
+	Active       int      `json:"active"`
 	Links        apiLinks `json:"links"`
 }
 
 type assignment struct {
-	ID        int64  `json:"id"`
-	Title     string `json:"title"`
+	ID          int64  `json:"id"`
+	Title       string `json:"title"`
 	Description string `json:"description"`
-	Due       string `json:"due"`
-	Published int    `json:"published"`
-	Available int    `json:"available"`
-	Completed int    `json:"completed"`
-	WebURL    string `json:"web_url"`
+	Due         string `json:"due"`
+	Published   int    `json:"published"`
+	Available   int    `json:"available"`
+	Completed   int    `json:"completed"`
+	WebURL      string `json:"web_url"`
 }
 
 type event struct {
@@ -84,11 +84,26 @@ type eventsPage struct {
 }
 
 type upcomingItem struct {
-	Course    string `json:"course"`
-	SectionID int64  `json:"section_id"`
-	Title     string `json:"title"`
-	Due       string `json:"due"`
-	WebURL    string `json:"web_url"`
+	Course       string `json:"course"`
+	SectionID    int64  `json:"section_id"`
+	AssignmentID int64  `json:"assignment_id"`
+	Title        string `json:"title"`
+	Due          string `json:"due"`
+	WebURL       string `json:"web_url"`
+}
+
+type revision struct {
+	RevisionID int64 `json:"revision_id"`
+	UID        int64 `json:"uid"`
+	Created    int64 `json:"created"`
+	Late       int   `json:"late"`
+	Draft      int   `json:"draft"`
+	NumItems   int   `json:"num_items"`
+}
+
+type revisionsPage struct {
+	Revision []revision `json:"revision"`
+	Links    apiLinks   `json:"links"`
 }
 
 func main() {
@@ -116,9 +131,54 @@ func run(args []string) error {
 		return runAssignments(args[1:])
 	case "upcoming":
 		return runUpcoming(args[1:])
+	case "submissions":
+		return runSubmissions(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runSubmissions(args []string) error {
+	fs := flag.NewFlagSet("submissions", flag.ContinueOnError)
+	sectionID := fs.Int64("section", 0, "section ID")
+	assignmentID := fs.Int64("assignment", 0, "assignment/grade item ID")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *sectionID == 0 || *assignmentID == 0 {
+		return errors.New("submissions requires --section <id> --assignment <id>")
+	}
+
+	client, err := newClientFromEnv()
+	if err != nil {
+		return err
+	}
+	me, err := client.Me()
+	if err != nil {
+		return err
+	}
+	revisions, err := client.Submissions(*sectionID, *assignmentID, me.ID)
+	if err != nil {
+		return err
+	}
+
+	if *jsonOut {
+		return writeJSON(struct {
+			Submitted bool       `json:"submitted"`
+			Revisions []revision `json:"revisions"`
+		}{Submitted: hasSubmittedRevision(revisions), Revisions: revisions})
+	}
+
+	fmt.Printf("Submitted:\t%t\n", hasSubmittedRevision(revisions))
+	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "REVISION_ID\tCREATED\tLATE\tDRAFT\tITEMS")
+	for _, r := range revisions {
+		created := time.Unix(r.Created, 0).Format("2006-01-02 15:04")
+		fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\n", r.RevisionID, created, r.Late, r.Draft, r.NumItems)
+	}
+	return tw.Flush()
 }
 
 func runMe(args []string) error {
@@ -359,6 +419,29 @@ func (c *Client) Events(sectionID int64) ([]event, error) {
 	return out, nil
 }
 
+func (c *Client) Submissions(sectionID, gradeItemID, userID int64) ([]revision, error) {
+	var out []revision
+	next := fmt.Sprintf("/sections/%d/submissions/%d/%d?limit=200", sectionID, gradeItemID, userID)
+	for next != "" {
+		var page revisionsPage
+		if err := c.getJSON(next, &page); err != nil {
+			return nil, err
+		}
+		out = append(out, page.Revision...)
+		next = nextPath(page.Links.Next)
+	}
+	return out, nil
+}
+
+func hasSubmittedRevision(revisions []revision) bool {
+	for _, r := range revisions {
+		if r.Draft != 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) Upcoming(days int) ([]upcomingItem, error) {
 	sections, err := c.Sections()
 	if err != nil {
@@ -391,11 +474,12 @@ func (c *Client) Upcoming(days int) ([]upcomingItem, error) {
 				continue
 			}
 			items = append(items, upcomingItem{
-				Course:    s.CourseTitle,
-				SectionID: s.ID,
-				Title:     e.Title,
-				Due:       e.Start,
-				WebURL:    e.WebURL,
+				Course:       s.CourseTitle,
+				SectionID:    s.ID,
+				AssignmentID: e.AssignmentID,
+				Title:        e.Title,
+				Due:          e.Start,
+				WebURL:       e.WebURL,
 			})
 		}
 	}
@@ -556,6 +640,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  schoologyCLI sections [--all] [--json]")
 	fmt.Fprintln(w, "  schoologyCLI assignments --section <id> [--limit N] [--incomplete] [--json]")
 	fmt.Fprintln(w, "  schoologyCLI upcoming [--days N] [--json]")
+	fmt.Fprintln(w, "  schoologyCLI submissions --section <id> --assignment <id> [--json]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Environment:")
 	fmt.Fprintln(w, "  SCHOOLOGY_KEY       Schoology consumer key")
