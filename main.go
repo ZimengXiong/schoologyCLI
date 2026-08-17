@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -48,14 +49,16 @@ type section struct {
 }
 
 type assignment struct {
-	ID          int64  `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Due         string `json:"due"`
-	Published   int    `json:"published"`
-	Available   int    `json:"available"`
-	Completed   int    `json:"completed"`
-	WebURL      string `json:"web_url"`
+	ID          int64           `json:"id"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Due         string          `json:"due"`
+	Published   int             `json:"published"`
+	Available   int             `json:"available"`
+	Completed   int             `json:"completed"`
+	WebURL      string          `json:"web_url"`
+	Attachments json.RawMessage `json:"attachments,omitempty"`
+	Tags        json.RawMessage `json:"tags,omitempty"`
 }
 
 type event struct {
@@ -106,6 +109,73 @@ type revisionsPage struct {
 	Links    apiLinks   `json:"links"`
 }
 
+type update struct {
+	ID          int64  `json:"id"`
+	Body        string `json:"body"`
+	UID         int64  `json:"uid"`
+	DisplayName string `json:"display_name"`
+	Created     int64  `json:"created"`
+	LastUpdated int64  `json:"last_updated"`
+}
+
+type updatesPage struct {
+	Update []update `json:"update"`
+	Links  apiLinks `json:"links"`
+}
+
+type document struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	CourseFID int64  `json:"course_fid"`
+	Available int    `json:"available"`
+	Published int    `json:"published"`
+	Completed int    `json:"completed"`
+	URL       string `json:"url"`
+}
+
+type documentsPage struct {
+	Document []document `json:"document"`
+	Links    apiLinks   `json:"links"`
+}
+
+type page struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	Parent    int64  `json:"parent"`
+	Published int    `json:"published"`
+	Available int    `json:"available"`
+	Completed int    `json:"completed"`
+	Created   int64  `json:"created"`
+}
+
+type pagesPage struct {
+	Page  []page   `json:"page"`
+	Links apiLinks `json:"links"`
+}
+
+type auditItem struct {
+	Course             string    `json:"course"`
+	SectionID          int64     `json:"section_id"`
+	AssignmentID       int64     `json:"assignment_id"`
+	Title              string    `json:"title"`
+	Description        string    `json:"description,omitempty"`
+	Due                string    `json:"due"`
+	WebURL             string    `json:"web_url"`
+	SubmissionStatus   string    `json:"submission_status"`
+	LatestSubmission   *revision `json:"latest_submission,omitempty"`
+	SubmissionError    string    `json:"submission_error,omitempty"`
+	ExternalSubmission bool      `json:"external_submission"`
+	Actionable         bool      `json:"actionable"`
+}
+
+type auditResult struct {
+	GeneratedAt  string      `json:"generated_at"`
+	Days         int         `json:"days"`
+	CourseFilter string      `json:"course_filter,omitempty"`
+	Items        []auditItem `json:"items"`
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -133,6 +203,16 @@ func run(args []string) error {
 		return runUpcoming(args[1:])
 	case "submissions":
 		return runSubmissions(args[1:])
+	case "assignment":
+		return runAssignment(args[1:])
+	case "updates":
+		return runUpdates(args[1:])
+	case "documents":
+		return runDocuments(args[1:])
+	case "pages":
+		return runPages(args[1:])
+	case "audit", "todos":
+		return runAudit(args[0], args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -218,6 +298,7 @@ func runSections(args []string) error {
 	fs := flag.NewFlagSet("sections", flag.ContinueOnError)
 	jsonOut := fs.Bool("json", false, "output JSON")
 	all := fs.Bool("all", false, "include inactive sections")
+	course := fs.String("course", "", "filter course or section title (case-insensitive)")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -241,6 +322,15 @@ func runSections(args []string) error {
 		}
 		sections = filtered
 	}
+	if *course != "" {
+		filtered := sections[:0]
+		for _, s := range sections {
+			if sectionMatches(s, *course) {
+				filtered = append(filtered, s)
+			}
+		}
+		sections = filtered
+	}
 
 	sort.Slice(sections, func(i, j int) bool {
 		if sections[i].CourseTitle == sections[j].CourseTitle {
@@ -257,6 +347,169 @@ func runSections(args []string) error {
 	fmt.Fprintln(tw, "SECTION_ID\tCOURSE\tSECTION\tACTIVE")
 	for _, s := range sections {
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%d\n", s.ID, s.CourseTitle, s.SectionTitle, s.Active)
+	}
+	return tw.Flush()
+}
+
+func runAssignment(args []string) error {
+	fs := flag.NewFlagSet("assignment", flag.ContinueOnError)
+	sectionID := fs.Int64("section", 0, "section ID")
+	assignmentID := fs.Int64("assignment", 0, "assignment ID")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *sectionID == 0 || *assignmentID == 0 {
+		return errors.New("assignment requires --section <id> --assignment <id>")
+	}
+	client, err := newClientFromEnv()
+	if err != nil {
+		return err
+	}
+	a, err := client.Assignment(*sectionID, *assignmentID)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return writeJSON(a)
+	}
+	fmt.Printf("ID:\t%d\nTitle:\t%s\nDue:\t%s\nURL:\t%s\nDescription:\t%s\n", a.ID, a.Title, displayTime(a.Due), a.WebURL, a.Description)
+	return nil
+}
+
+func runUpdates(args []string) error {
+	fs := flag.NewFlagSet("updates", flag.ContinueOnError)
+	sectionID := fs.Int64("section", 0, "section ID")
+	limit := fs.Int("limit", 0, "limit results after fetch")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *sectionID == 0 {
+		return errors.New("updates requires --section <id>")
+	}
+	client, err := newClientFromEnv()
+	if err != nil {
+		return err
+	}
+	items, err := client.Updates(*sectionID)
+	if err != nil {
+		return err
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Created > items[j].Created })
+	if *limit > 0 && *limit < len(items) {
+		items = items[:*limit]
+	}
+	if *jsonOut {
+		return writeJSON(items)
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "CREATED\tAUTHOR\tBODY")
+	for _, item := range items {
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", displayUnix(item.Created), item.DisplayName, oneLine(item.Body))
+	}
+	return tw.Flush()
+}
+
+func runDocuments(args []string) error {
+	fs := flag.NewFlagSet("documents", flag.ContinueOnError)
+	sectionID := fs.Int64("section", 0, "section ID")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *sectionID == 0 {
+		return errors.New("documents requires --section <id>")
+	}
+	client, err := newClientFromEnv()
+	if err != nil {
+		return err
+	}
+	items, err := client.Documents(*sectionID)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return writeJSON(items)
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "DOCUMENT_ID\tTITLE\tURL")
+	for _, item := range items {
+		fmt.Fprintf(tw, "%d\t%s\t%s\n", item.ID, item.Title, item.URL)
+	}
+	return tw.Flush()
+}
+
+func runPages(args []string) error {
+	fs := flag.NewFlagSet("pages", flag.ContinueOnError)
+	sectionID := fs.Int64("section", 0, "section ID")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *sectionID == 0 {
+		return errors.New("pages requires --section <id>")
+	}
+	client, err := newClientFromEnv()
+	if err != nil {
+		return err
+	}
+	items, err := client.Pages(*sectionID)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return writeJSON(items)
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "PAGE_ID\tTITLE\tPUBLISHED\tAVAILABLE")
+	for _, item := range items {
+		fmt.Fprintf(tw, "%d\t%s\t%d\t%d\n", item.ID, item.Title, item.Published, item.Available)
+	}
+	return tw.Flush()
+}
+
+func runAudit(command string, args []string) error {
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	days := fs.Int("days", 14, "include assignments due through N days from now")
+	course := fs.String("course", "", "filter course or section title (case-insensitive)")
+	includeOverdue := fs.Bool("include-overdue", true, "include overdue assignments")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *days < 0 {
+		return errors.New("--days must be zero or greater")
+	}
+	client, err := newClientFromEnv()
+	if err != nil {
+		return err
+	}
+	result, err := client.Audit(*days, *course, *includeOverdue)
+	if err != nil {
+		return err
+	}
+	if command == "todos" {
+		filtered := result.Items[:0]
+		for _, item := range result.Items {
+			if item.Actionable {
+				filtered = append(filtered, item)
+			}
+		}
+		result.Items = filtered
+	}
+	if *jsonOut {
+		return writeJSON(result)
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "DUE\tCOURSE\tSTATUS\tTITLE\tURL")
+	for _, item := range result.Items {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", displayTime(item.Due), item.Course, item.SubmissionStatus, item.Title, item.WebURL)
 	}
 	return tw.Flush()
 }
@@ -349,12 +602,18 @@ func runUpcoming(args []string) error {
 func newClientFromEnv() (*Client, error) {
 	key := strings.TrimSpace(os.Getenv("SCHOOLOGY_KEY"))
 	secret := strings.TrimSpace(os.Getenv("SCHOOLOGY_SECRET"))
+	if key == "" {
+		key = keychainCredential("consumer-key")
+	}
+	if secret == "" {
+		secret = keychainCredential("consumer-secret")
+	}
 	baseURL := strings.TrimSpace(os.Getenv("SCHOOLOGY_API_BASE"))
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
 	if key == "" || secret == "" {
-		return nil, errors.New("set SCHOOLOGY_KEY and SCHOOLOGY_SECRET")
+		return nil, errors.New("configure SCHOOLOGY_KEY and SCHOOLOGY_SECRET or the schoology-cli macOS Keychain entries")
 	}
 	return &Client{
 		Key:     key,
@@ -362,6 +621,17 @@ func newClientFromEnv() (*Client, error) {
 		BaseURL: strings.TrimRight(baseURL, "/"),
 		Client:  &http.Client{Timeout: 30 * time.Second},
 	}, nil
+}
+
+func keychainCredential(account string) string {
+	if _, err := exec.LookPath("security"); err != nil {
+		return ""
+	}
+	out, err := exec.Command("security", "find-generic-password", "-s", "schoology-cli", "-a", account, "-w").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func (c *Client) Me() (user, error) {
@@ -405,6 +675,57 @@ func (c *Client) Assignments(sectionID int64) ([]assignment, error) {
 	return out, nil
 }
 
+func (c *Client) Assignment(sectionID, assignmentID int64) (assignment, error) {
+	var out assignment
+	path := fmt.Sprintf("/sections/%d/assignments/%d?with_attachments=TRUE&with_tags=TRUE", sectionID, assignmentID)
+	if err := c.getJSON(path, &out); err != nil {
+		return assignment{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) Updates(sectionID int64) ([]update, error) {
+	var out []update
+	next := fmt.Sprintf("/sections/%d/updates?limit=200", sectionID)
+	for next != "" {
+		var page updatesPage
+		if err := c.getJSON(next, &page); err != nil {
+			return nil, err
+		}
+		out = append(out, page.Update...)
+		next = nextPath(page.Links.Next)
+	}
+	return out, nil
+}
+
+func (c *Client) Documents(sectionID int64) ([]document, error) {
+	var out []document
+	next := fmt.Sprintf("/sections/%d/documents?limit=200", sectionID)
+	for next != "" {
+		var page documentsPage
+		if err := c.getJSON(next, &page); err != nil {
+			return nil, err
+		}
+		out = append(out, page.Document...)
+		next = nextPath(page.Links.Next)
+	}
+	return out, nil
+}
+
+func (c *Client) Pages(sectionID int64) ([]page, error) {
+	var out []page
+	next := fmt.Sprintf("/sections/%d/pages?limit=200", sectionID)
+	for next != "" {
+		var response pagesPage
+		if err := c.getJSON(next, &response); err != nil {
+			return nil, err
+		}
+		out = append(out, response.Page...)
+		next = nextPath(response.Links.Next)
+	}
+	return out, nil
+}
+
 func (c *Client) Events(sectionID int64) ([]event, error) {
 	var out []event
 	next := fmt.Sprintf("/sections/%d/events?limit=200", sectionID)
@@ -440,6 +761,79 @@ func hasSubmittedRevision(revisions []revision) bool {
 		}
 	}
 	return false
+}
+
+func submissionState(revisions []revision) (string, *revision) {
+	var latest *revision
+	for i := range revisions {
+		if revisions[i].Draft == 1 {
+			continue
+		}
+		if latest == nil || revisions[i].Created > latest.Created {
+			copy := revisions[i]
+			latest = &copy
+		}
+	}
+	if latest != nil {
+		return "submitted", latest
+	}
+	if len(revisions) > 0 {
+		return "draft", nil
+	}
+	return "not_submitted", nil
+}
+
+func (c *Client) Audit(days int, courseFilter string, includeOverdue bool) (auditResult, error) {
+	me, err := c.Me()
+	if err != nil {
+		return auditResult{}, err
+	}
+	sections, err := c.Sections()
+	if err != nil {
+		return auditResult{}, err
+	}
+	now := time.Now()
+	cutoff := now.Add(time.Duration(days) * 24 * time.Hour)
+	result := auditResult{GeneratedAt: now.Format(time.RFC3339), Days: days, CourseFilter: courseFilter, Items: []auditItem{}}
+	for _, s := range sections {
+		if s.Active != 1 || !sectionMatches(s, courseFilter) {
+			continue
+		}
+		assignments, fetchErr := c.Assignments(s.ID)
+		if fetchErr != nil {
+			return auditResult{}, fmt.Errorf("assignments for %s: %w", s.CourseTitle, fetchErr)
+		}
+		for _, a := range assignments {
+			if a.Due == "" {
+				continue
+			}
+			due, parseErr := parseSchoologyTime(a.Due)
+			if parseErr != nil || due.After(cutoff) || (!includeOverdue && due.Before(now)) {
+				continue
+			}
+			item := auditItem{Course: s.CourseTitle, SectionID: s.ID, AssignmentID: a.ID, Title: a.Title, Description: a.Description, Due: a.Due, WebURL: a.WebURL}
+			item.ExternalSubmission = isExternalSubmission(a)
+			revisions, submissionErr := c.Submissions(s.ID, a.ID, me.ID)
+			if submissionErr != nil {
+				item.SubmissionStatus = "unknown"
+				item.SubmissionError = submissionErr.Error()
+			} else {
+				item.SubmissionStatus, item.LatestSubmission = submissionState(revisions)
+			}
+			if item.ExternalSubmission && item.SubmissionStatus != "submitted" {
+				item.SubmissionStatus = "external"
+			}
+			item.Actionable = item.SubmissionStatus != "submitted"
+			result.Items = append(result.Items, item)
+		}
+	}
+	sort.Slice(result.Items, func(i, j int) bool {
+		if result.Items[i].Due == result.Items[j].Due {
+			return result.Items[i].Course < result.Items[j].Course
+		}
+		return result.Items[i].Due < result.Items[j].Due
+	})
+	return result, nil
 }
 
 func (c *Client) Upcoming(days int) ([]upcomingItem, error) {
@@ -626,6 +1020,31 @@ func displayTime(value string) string {
 	return t.Format("2006-01-02 15:04")
 }
 
+func displayUnix(value int64) string {
+	if value == 0 {
+		return "-"
+	}
+	return time.Unix(value, 0).Format("2006-01-02 15:04")
+}
+
+func oneLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func sectionMatches(s section, filter string) bool {
+	needle := strings.ToLower(strings.TrimSpace(filter))
+	if needle == "" {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{s.CourseTitle, s.CourseCode, s.SectionTitle}, " "))
+	return strings.Contains(haystack, needle)
+}
+
+func isExternalSubmission(a assignment) bool {
+	text := strings.ToLower(a.Title + " " + a.Description + " " + a.WebURL)
+	return strings.Contains(text, "turnitin")
+}
+
 func writeJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -637,13 +1056,20 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  schoologyCLI me [--json]")
-	fmt.Fprintln(w, "  schoologyCLI sections [--all] [--json]")
+	fmt.Fprintln(w, "  schoologyCLI sections [--all] [--course text] [--json]")
 	fmt.Fprintln(w, "  schoologyCLI assignments --section <id> [--limit N] [--incomplete] [--json]")
+	fmt.Fprintln(w, "  schoologyCLI assignment --section <id> --assignment <id> [--json]")
 	fmt.Fprintln(w, "  schoologyCLI upcoming [--days N] [--json]")
 	fmt.Fprintln(w, "  schoologyCLI submissions --section <id> --assignment <id> [--json]")
+	fmt.Fprintln(w, "  schoologyCLI updates --section <id> [--limit N] [--json]")
+	fmt.Fprintln(w, "  schoologyCLI documents --section <id> [--json]")
+	fmt.Fprintln(w, "  schoologyCLI pages --section <id> [--json]")
+	fmt.Fprintln(w, "  schoologyCLI audit [--days N] [--course text] [--include-overdue=false] [--json]")
+	fmt.Fprintln(w, "  schoologyCLI todos [--days N] [--course text] [--include-overdue=false] [--json]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Environment:")
 	fmt.Fprintln(w, "  SCHOOLOGY_KEY       Schoology consumer key")
 	fmt.Fprintln(w, "  SCHOOLOGY_SECRET    Schoology consumer secret")
 	fmt.Fprintln(w, "  SCHOOLOGY_API_BASE  Optional API base URL (default https://api.schoology.com/v1)")
+	fmt.Fprintln(w, "  macOS Keychain fallback: service schoology-cli, accounts consumer-key and consumer-secret")
 }
